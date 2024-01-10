@@ -11,7 +11,13 @@
 #include <iostream>
 #include <math.h>
 #include <thread>
-#include <memory>
+#include <atomic>
+#include <fstream>
+#include <sstream>
+#include <unordered_map>
+#include <filesystem>
+namespace fs = std::filesystem;
+using Meminfo = std::unordered_map<std::string, float>;
 
 #define BUF 256
 
@@ -23,20 +29,10 @@
 // date & time with formatting
 #define DT "date +\"%Y-%m-%d %H:%M\""
 
-// BATTERY: percentage, remaining time, state checker (charging/discharging), presence checker
-#define BATP "acpi | grep -o \"[0-9]*%\""
+// Battery: remaining time
 #define BATR "acpi | grep -o \"[0-9][0-9]:[0-9][0-9]\""
-#define BATD "acpi | grep Discharging"
-#define BATCHECK "cat /sys/class/power_supply/*/type"
-
-// MEMORY
-#define M_TOTAL "cat /proc/meminfo | grep MemTotal | grep -o \"[0-9]*\""
-#define M_FREE "cat /proc/meminfo | grep MemFree | grep -o \"[0-9]*\""
-#define M_BUFFERS "cat /proc/meminfo | grep Buffers | grep -o \"[0-9]*\""
-#define M_CACHED "cat /proc/meminfo | grep Cached | grep -o \"[0-9]*\""
 
 // LOAD/CPU
-#define LOAD "uptime | grep -o \"[0-9]*\\.[0-9][0-9]\" | head -1"
 #define CPU "echo \"$[100-$(vmstat 1 2|tail -1|awk '{print $15}')]\""
 
 // TEMPERATURE
@@ -160,21 +156,51 @@ std::string getDateTime(bool gui){
 }
 
 // BATTERY ------------------------------------------------------
-std::string getIcon(){
-	if (getCmdOut(BATD) == "") return "🔌";
+bool batCheck(std::string &batdir){
+	for (const auto &dir: fs::directory_iterator("/sys/class/power_supply/")){
+		std::string dirstr = dir.path().string();
+		std::ifstream f(dirstr + "/type");
+		std::string s;
+		f >> s;
+		if (s == "Battery"){
+			batdir = dirstr;
+			return true;
+		}
+	}
+	return false;
+}
+
+struct Battinfo {
+	std::string state;
+	int capacity;
+	
+};
+
+Battinfo getBattinfo(std::string batdir){
+	Battinfo info;
+
+	std::ifstream s(batdir + "/status");
+	s >> info.state;
+
+	std::ifstream c(batdir + "/capacity");
+	c >> info.capacity;
+	return info;
+}
+
+std::string getIcon(std::string state){
+	if (state ==  "Charging") return "🔌";
 	return "⚡";
 }
 
-std::string getBat(bool gui){
-	std::string s = getCmdOut(BATP);
-
+std::string getBat(bool gui, std::string batdir){
+	Battinfo info = getBattinfo(batdir);
 	std::string result;
-	if (gui) result += getIcon() + " ";
-	result += pad(s, 4);
-	// result += std::format("{:<4}", s); // C++ 20+ only
 
-	s.pop_back();
-	float b = s2f(s)/100.0;
+	if (gui) result += getIcon(info.state) + " ";
+	std::string s = std::to_string(info.capacity) + "%";
+	result += pad(s, 4);
+	float b = static_cast<float>(info.capacity)/100.0;
+
 	result += "║";
 	if (gui) result += progBarGui(b, 4);
 	else result += progBarTty(b, 4);
@@ -186,14 +212,23 @@ std::string getBat(bool gui){
 // LOAD/CPU ------------------------------------------------------------------------------
 // this function runs in a separate thread,
 // as the command takes a second to report back
-void setCpu(std::shared_ptr<float> cpu, bool *bRun){
-	while (*bRun){
-		*cpu = s2f(getCmdOut(CPU))/100.0;
+void setCpu(std::atomic<float> &cpu, std::atomic<bool> &bRun){
+	while (bRun){
+		cpu = s2f(getCmdOut(CPU))/100.0;
 	}
 }
 
-std::string getLoad(bool gui, float cpu){
-	std::string load = getCmdOut(LOAD);
+std::string getLoad(){
+	std::string load;
+	std::ifstream f("/proc/loadavg");
+	std::getline(f, load);
+	std::istringstream ss(load);
+	ss >> load;
+	return load;
+}
+
+std::string getCpu(bool gui, float cpu){
+	std::string load = getLoad();
 	std::string result;
 	if (gui) result += "🖥  ";
 	result += pad(load, 9);
@@ -207,12 +242,28 @@ std::string getLoad(bool gui, float cpu){
 }
 
 // MEMORY -----------------------------------------------------------
+Meminfo getMeminfo(){
+	Meminfo meminfo;
+	std::ifstream f("/proc/meminfo");
+	for (std::string line; std::getline(f, line);){
+		std::istringstream ss(line);
+		std::string key;
+		float value;
+		ss >> key >> value;
+		if (!key.empty()) key.pop_back(); // remove the trailing ":"
+		meminfo[key] = value;
+	}
+	return meminfo;
+}
+
 std::string getMem(bool gui){
+	Meminfo meminfo = getMeminfo();
+
 	std::string result;
 	if (gui) result += "🎟  ";
-	float total = s2f(getCmdOut(M_TOTAL));
-	float used = total - s2f(getCmdOut(M_FREE));
-	used -= ( s2f(getCmdOut(M_BUFFERS)) + s2f(getCmdOut(M_CACHED)) );
+	float total = meminfo["MemTotal"];
+	float used = total - meminfo["MemFree"];
+	used -= meminfo["Buffers"] + meminfo["Cached"];
 	int dp = 1; // decimal place to round to
 	float usedGb = roundToDp(kbToGb(used), dp);
 	std::string s = std::to_string(usedGb);
@@ -288,6 +339,7 @@ int main(int argc, char* argv[]){
 	setlocale(LC_ALL, ""); // so we can use emojis!
 	initscr();
 	noecho();
+	curs_set(0);
 	cbreak();
 
 	bool gui = true;
@@ -302,18 +354,19 @@ int main(int argc, char* argv[]){
 	int scrx, scry;
 	int nLines = 3; // 5 minus bat and temp
 	
-	bool batSafe = getCmdOut(BATCHECK).find("Battery") != std::string::npos;
+	std::string batdir;
+	bool batSafe = batCheck(batdir);
 	bool tempSafe = system("sensors 1>/dev/null") == 0;
 	nLines += batSafe + tempSafe;
 
-	bool bRun = true;
 	// run the cpu utilisation function in a separate thread
-	std::shared_ptr<float> cpu_sp = std::make_shared<float>(0.0);
-	std::thread cpuThr(setCpu, std::ref(cpu_sp), &bRun);
+	std::atomic<bool> bRun = true;
+	std::atomic<float> cpu = 0.0;
+	std::thread cpuThr(setCpu, std::ref(cpu), std::ref(bRun));
+	cpuThr.detach();
 
 	while (bRun){
 		erase();
-		curs_set(0);
 
 		getmaxyx(stdscr, scry, scrx);
 		float x = (scrx - w) / 2.0;
@@ -321,8 +374,8 @@ int main(int argc, char* argv[]){
 		int offset = 0;
 
 		if (bDateTime)		{ mvprintw(y+offset, x, getDateTime(gui).c_str()); offset++; }
-		if (bBatt && batSafe)	{ mvprintw(y+offset, x, getBat(gui).c_str()); offset++; }
-		if (bLoad)		{ mvprintw(y+offset, x, getLoad(gui, *cpu_sp).c_str()); offset++; }
+		if (bBatt && batSafe)	{ mvprintw(y+offset, x, getBat(gui, batdir).c_str()); offset++; }
+		if (bLoad)		{ mvprintw(y+offset, x, getCpu(gui, cpu).c_str()); offset++; }
 		if (bMem)		{ mvprintw(y+offset, x, getMem(gui).c_str()); offset++; }
 		if (bTemp && tempSafe)	{ mvprintw(y+offset, x, getTemp(gui).c_str()); offset++; }
 		if (bHelp)		mvprintw(0, 0, helpStr);
@@ -376,6 +429,5 @@ int main(int argc, char* argv[]){
 		}
 	}
 	endwin();
-	cpuThr.join();
 	return 0;
 }
