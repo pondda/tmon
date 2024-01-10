@@ -1,5 +1,5 @@
 make: tmon.cpp
-	g++ tmon.cpp -lncursesw -pthread -o tmon
+	g++ tmon.cpp -std=c++17 -lncursesw -pthread -o tmon
 
 install: tmon
 	cp tmon /bin/
