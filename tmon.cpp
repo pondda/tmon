@@ -188,8 +188,8 @@ Battinfo getBattinfo(std::string batdir){
 }
 
 std::string getIcon(std::string state){
-	if (state ==  "Charging") return "🔌";
-	return "⚡";
+	if (state ==  "Discharging") return "⚡";
+	return "🔌";
 }
 
 std::string getBat(bool gui, std::string batdir){
