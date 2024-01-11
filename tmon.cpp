@@ -148,7 +148,7 @@ std::string getDateTime(bool gui){
 	if (gui) result += "🕒 ";
 
 	std::time_t t = std::time(nullptr);
-	char str[100];
+	char str[17];
 	if (std::strftime(str, sizeof(str), "%Y-%m-%d %H:%M", std::localtime(&t))) result += str;
 
 	return result;
