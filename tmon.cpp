@@ -9,6 +9,7 @@
 // #include <format> // C++ 20+ only
 #include <locale>
 #include <iostream>
+#include <ctime>
 #include <math.h>
 #include <thread>
 #include <atomic>
@@ -26,16 +27,10 @@ using Meminfo = std::unordered_map<std::string, float>;
 #define TEMP_MAX 100
 
 // linux commands -------------------------------------------------------------------------------------------
-// date & time with formatting
-#define DT "date +\"%Y-%m-%d %H:%M\""
-
-// Battery: remaining time
-#define BATR "acpi | grep -o \"[0-9][0-9]:[0-9][0-9]\""
-
-// LOAD/CPU
+// CPU utilization
 #define CPU "echo \"$[100-$(vmstat 1 2|tail -1|awk '{print $15}')]\""
 
-// TEMPERATURE
+// temperature
 #define TEMP "sensors | grep \"Core 0\" | grep -o \"[0-9]*.[0-9]°C\" | head -1"
 
 // utils ---------------------------------------
@@ -151,7 +146,11 @@ std::string progBarTty(float prog, int nb){
 std::string getDateTime(bool gui){
 	std::string result;
 	if (gui) result += "🕒 ";
-	result += getCmdOut(DT);
+
+	std::time_t t = std::time(nullptr);
+	char str[100];
+	if (std::strftime(str, sizeof(str), "%Y-%m-%d %H:%M", std::localtime(&t))) result += str;
+
 	return result;
 }
 
@@ -173,18 +172,62 @@ bool batCheck(std::string &batdir){
 struct Battinfo {
 	std::string state;
 	int capacity;
-	
+	int time;
 };
 
 Battinfo getBattinfo(std::string batdir){
 	Battinfo info;
 
-	std::ifstream s(batdir + "/status");
-	s >> info.state;
+	std::ifstream f(batdir + "/status");
+	f >> info.state;
+	f.close();
 
-	std::ifstream c(batdir + "/capacity");
-	c >> info.capacity;
+	f.open(batdir + "/capacity");
+	f >> info.capacity;
+	f.close();
+
+	float full, curr, rate;
+	f.open(batdir + "/charge_full");
+	if (f.fail()) f.open(batdir + "/energy_full");
+	f >> full;
+	f.close();
+
+	f.open(batdir + "/charge_now");
+	if (f.fail()) f.open(batdir + "/energy_now");
+	f >> curr;
+	f.close();
+
+	f.open(batdir + "/current_now");
+	if (f.fail()) f.open(batdir + "/power_now");
+	f >> rate;
+	f.close();
+
+	// set the remaining time in seconds
+	full /= 1000;
+	curr /= 1000;
+	rate /= 1000;
+	if (info.state == "Charging") info.time = ((full - curr) / rate)* 3600;
+	else if (info.state == "Discharging") info.time =  (curr / rate) * 3600;
+	else info.time = 0;
+
 	return info;
+}
+
+std::string getTimeStr(int seconds){
+	if (seconds <= 0.0) return "";
+
+	int hours, minutes;
+	hours = seconds / 3600;
+	seconds -= hours * 3600;
+	minutes = seconds / 60;
+	
+	std::string h, m;
+	h = std::to_string(hours);
+	m = std::to_string(minutes);
+	if (h.size() < 2) h = "0" + h;
+	if (m.size() < 2) m = "0" + m;
+	
+	return h + ":" + m;
 }
 
 std::string getIcon(std::string state){
@@ -205,7 +248,7 @@ std::string getBat(bool gui, std::string batdir){
 	if (gui) result += progBarGui(b, 4);
 	else result += progBarTty(b, 4);
 	result += "╠ ";
-	result += getCmdOut(BATR);
+	result += getTimeStr(info.time);
 	return result;
 }
 

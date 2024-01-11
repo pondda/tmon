@@ -21,7 +21,6 @@
 - ncurses
 ### Runtime dependencies
 - `sensors`
-- `acpi`
 
 ## Installation
 ### Build & install
