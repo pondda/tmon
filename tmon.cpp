@@ -17,6 +17,7 @@
 #include <sstream>
 #include <unordered_map>
 #include <filesystem>
+#include <chrono>
 namespace fs = std::filesystem;
 using Meminfo = std::unordered_map<std::string, float>;
 
@@ -26,11 +27,7 @@ using Meminfo = std::unordered_map<std::string, float>;
 #define TEMP_MIN 0
 #define TEMP_MAX 100
 
-// linux commands -------------------------------------------------------------------------------------------
-// CPU utilization
-#define CPU "echo \"$[100-$(vmstat 1 2|tail -1|awk '{print $15}')]\""
-
-// temperature
+// linux command for temperature
 #define TEMP "sensors | grep \"Core 0\" | grep -o \"[0-9]*.[0-9]°C\" | head -1"
 
 // utils ---------------------------------------
@@ -253,20 +250,78 @@ std::string getBat(bool gui, std::string batdir){
 }
 
 // LOAD/CPU ------------------------------------------------------------------------------
-// this function runs in a separate thread,
-// as the command takes a second to report back
+struct Cpuinfo {
+	unsigned long long user;
+	unsigned long long nice;
+	unsigned long long sys;
+	unsigned long long idle;
+	unsigned long long iowait;
+	unsigned long long irq;
+	unsigned long long softirq;
+	unsigned long long steal;
+	unsigned long long guest;
+	unsigned long long guest_nice;
+};
+
+Cpuinfo getCpuinfo(){
+	Cpuinfo info;
+	std::ifstream f("/proc/stat");
+	std::string s;
+	f >> s >> info.user \
+		>> info.nice \
+		>> info.sys \
+		>> info.idle \
+		>> info.iowait \
+		>> info.irq \
+		>> info.softirq \
+		>> info.steal \
+		>> info.guest \
+		>> info.guest_nice;
+	return info;
+}
+
+unsigned long long getCpuTotal(Cpuinfo &info){
+	unsigned long long total = 0;
+	total += info.user;
+	total += info.nice;
+	total += info.sys;
+	total += info.idle;
+	total += info.iowait;
+	total += info.irq;
+	total += info.softirq;
+	total += info.steal;
+	total += info.guest;
+	total += info.guest_nice;
+	return total;
+}
+
 void setCpu(std::atomic<float> &cpu, std::atomic<bool> &bRun){
+	unsigned long long currTotal, currUsed;
+	unsigned long long prevTotal = 0;
+	unsigned long long prevUsed = 0;
+	unsigned long long total, used;
+	Cpuinfo info;
+
 	while (bRun){
-		cpu = s2f(getCmdOut(CPU))/100.0;
+		info = getCpuinfo();
+		currTotal = getCpuTotal(info);
+		currUsed = currTotal - info.idle;
+
+		total = currTotal - prevTotal;
+		used = currUsed - prevUsed;
+		cpu = static_cast<float>(used) / static_cast<float>(total);
+
+		prevTotal = currTotal;
+		prevUsed = currUsed;
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 	}
 }
 
 std::string getLoad(){
 	std::string load;
 	std::ifstream f("/proc/loadavg");
-	std::getline(f, load);
-	std::istringstream ss(load);
-	ss >> load;
+	f >> load;
 	return load;
 }
 
@@ -333,10 +388,10 @@ std::string getTemp(bool gui){
 	
 	s = s.substr(0, s.find("°C"));
 	float temp = s2f(s);
-	float p = (temp - TEMP_MIN)  / (TEMP_MAX - TEMP_MIN);
+	temp = (temp - TEMP_MIN)  / (TEMP_MAX - TEMP_MIN);
 	result += "[";
-	if (gui) result += progBarGui(p, 7);
-	else result += progBarTty(p, 7);
+	if (gui) result += progBarGui(temp, 7);
+	else result += progBarTty(temp, 7);
 	result += "]";
 	return result;
 }
