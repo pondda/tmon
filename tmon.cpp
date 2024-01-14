@@ -330,6 +330,21 @@ struct Cpuinfo {
 	unsigned long long steal;
 	unsigned long long guest;
 	unsigned long long guest_nice;
+
+	unsigned long long getTotal(){
+		unsigned long long total = 0;
+		total += user;
+		total += nice;
+		total += sys;
+		total += idle;
+		total += iowait;
+		total += irq;
+		total += softirq;
+		total += steal;
+		total += guest;
+		total += guest_nice;
+		return total;
+	}
 };
 
 Cpuinfo getCpuinfo(){
@@ -349,21 +364,6 @@ Cpuinfo getCpuinfo(){
 	return info;
 }
 
-unsigned long long getCpuTotal(Cpuinfo &info){
-	unsigned long long total = 0;
-	total += info.user;
-	total += info.nice;
-	total += info.sys;
-	total += info.idle;
-	total += info.iowait;
-	total += info.irq;
-	total += info.softirq;
-	total += info.steal;
-	total += info.guest;
-	total += info.guest_nice;
-	return total;
-}
-
 void setCpu(std::atomic<float> &cpu, std::atomic<bool> &bRun){
 	unsigned long long currTotal, currUsed;
 	unsigned long long prevTotal = 0;
@@ -373,7 +373,7 @@ void setCpu(std::atomic<float> &cpu, std::atomic<bool> &bRun){
 
 	while (bRun){
 		info = getCpuinfo();
-		currTotal = getCpuTotal(info);
+		currTotal = info.getTotal();
 		currUsed = currTotal - info.idle;
 
 		total = currTotal - prevTotal;
