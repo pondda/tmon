@@ -11,6 +11,7 @@
 #include <iostream>
 #include <ctime>
 #include <math.h>
+#include <algorithm>
 #include <thread>
 #include <atomic>
 #include <fstream>
@@ -23,12 +24,80 @@ using Meminfo = std::unordered_map<std::string, float>;
 
 #define BUF 256
 
-#define INTERVAL 2000
-#define TEMP_MIN 0
-#define TEMP_MAX 100
+// CONFIG -------------------------------------------------------
+struct Config{
+	int interval;
+	std::string temp_sensor;
+	int temp_min;
+	int temp_max;
+};
 
-// linux command for temperature
-#define TEMP "sensors | grep \"Core 0\" | grep -o \"[0-9]*.[0-9]°C\" | head -1"
+const char* confStr =
+	"interval 2000\n"
+	"temp_sensor \"Core 0\"\n"
+	"temp_min 0\n"
+	"temp_max 100";
+
+void generateConf(){
+	if (const char* home = std::getenv("HOME")){
+		std::string path = home;
+		path += "/.config/tmon.conf";
+		std::cout << "Generating config file at " << path << std::endl;
+		std::ofstream f(path);
+		if (f.fail()){
+			std::cout << "Could not create config file at" << path << std::endl;
+			exit(1);
+		}
+		f << confStr << std::endl;
+		f.close();
+	} else {
+		std::cout << "$HOME not found. Failed to generate config file" << std::endl;
+		exit(1);
+	}
+}
+
+std::string parseStr(std::string line){
+	std::string::difference_type n = std::count(line.begin(), line.end(), '\"');
+	if (n != 2) {
+		std::cout << "Invalid formatting in config file" << std::endl;
+		exit(1);
+	}
+
+	std::string::size_type start = 0;
+	std::string::size_type end = 0;
+
+	start = line.find("\"");
+	++start;
+	end = line.find("\"");
+	return line.substr(start - 1, end - start);
+}
+
+Config parseConfig(){
+	Config conf;
+	if (const char* home = std::getenv("HOME")){
+		std::string path = home;
+		path += "/.config/tmon.conf";
+		std::ifstream f(path);
+		if (f.fail()){
+			generateConf();
+			f.open(path);
+		}
+		for (std::string line; std::getline(f, line);){
+			std::istringstream ss(line);
+			std::string key;
+			ss >> key;
+			if (key == "interval") ss >> conf.interval;
+			else if (key == "temp_sensor") conf.temp_sensor = parseStr(line);
+			else if (key == "temp_min") ss >> conf.temp_min;
+			else if (key == "temp_max") ss >> conf.temp_max;
+		}
+
+	} else {
+		std::cout << "$HOME not found. Could not load config file" << std::endl;
+		exit(1);
+	}
+	return conf;
+}
 
 // utils ---------------------------------------
 std::string getCmdOut(std::string cmdstr){
@@ -309,7 +378,7 @@ void setCpu(std::atomic<float> &cpu, std::atomic<bool> &bRun){
 
 		total = currTotal - prevTotal;
 		used = currUsed - prevUsed;
-		cpu = static_cast<float>(used) / static_cast<float>(total);
+		cpu = static_cast<float>( static_cast<double>(used) / static_cast<double>(total) );
 
 		prevTotal = currTotal;
 		prevUsed = currUsed;
@@ -378,8 +447,9 @@ std::string getMem(bool gui){
 }
 
 // TEMPERATURE---------------------------------------------------
-std::string getTemp(bool gui){
-	std::string s = getCmdOut(TEMP);
+std::string getTemp(bool gui, Config &conf){
+	std::string cmd = "sensors | grep " + conf.temp_sensor + " | grep -o \"[0-9]*.[0-9]°C\" | head -1";
+	std::string s = getCmdOut(cmd);
 	
 	std::string result;
 	if (gui) result += "🌡️  ";
@@ -388,7 +458,7 @@ std::string getTemp(bool gui){
 	
 	s = s.substr(0, s.find("°C"));
 	float temp = s2f(s);
-	temp = (temp - TEMP_MIN)  / (TEMP_MAX - TEMP_MIN);
+	temp = (temp - conf.temp_min)  / (conf.temp_max - conf.temp_min);
 	result += "[";
 	if (gui) result += progBarGui(temp, 7);
 	else result += progBarTty(temp, 7);
@@ -434,6 +504,8 @@ void parseArgs(int argc, char* argv[]){
 int main(int argc, char* argv[]){
 	parseArgs(argc, argv);
 
+	Config conf = parseConfig();
+
 	setlocale(LC_ALL, ""); // so we can use emojis!
 	initscr();
 	noecho();
@@ -475,12 +547,12 @@ int main(int argc, char* argv[]){
 		if (bBatt && batSafe)	{ mvprintw(y+offset, x, getBat(gui, batdir).c_str()); offset++; }
 		if (bLoad)		{ mvprintw(y+offset, x, getCpu(gui, cpu).c_str()); offset++; }
 		if (bMem)		{ mvprintw(y+offset, x, getMem(gui).c_str()); offset++; }
-		if (bTemp && tempSafe)	{ mvprintw(y+offset, x, getTemp(gui).c_str()); offset++; }
+		if (bTemp && tempSafe)	{ mvprintw(y+offset, x, getTemp(gui, conf).c_str()); offset++; }
 		if (bHelp)		mvprintw(0, 0, helpStr);
 
 		refresh();
 
-		timeout(INTERVAL);
+		timeout(conf.interval);
 		char key = getch();
 		switch (key) {
 			case 'q':
