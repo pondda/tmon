@@ -45,7 +45,7 @@ void generateConf(){
 		std::cout << "Generating config file at " << path << std::endl;
 		std::ofstream f(path);
 		if (f.fail()){
-			std::cout << "Could not create config file at" << path << std::endl;
+			std::cout << "Could not create config file at " << path << std::endl;
 			exit(1);
 		}
 		f << confStr << std::endl;
