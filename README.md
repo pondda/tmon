@@ -2,6 +2,9 @@
 ![tmon](img/tmon.png)
 
 ## Screenshots
+### tmon in kitty
+![tmon-kitty](img/tmon-kitty.png)
+
 ### tmon in st
 ![tmon-st](img/tmon-st.png)
 
