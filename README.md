@@ -28,7 +28,7 @@
 ## Installation
 ### Build & install
 ```
-git clone https://github.com/pondda/tmon.git
+git clone git@github.com:pondda/tmon.git
 cd tmon
 make && sudo make install
 ```
